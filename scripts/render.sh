@@ -118,6 +118,11 @@ if [[ -n "${COMMON_PATCH:-}" ]]; then
   patch_args+=(--config-patch "@$common_patch_path")
 fi
 if [[ "$role" == "controlplane" ]]; then
+  if [[ -n "${API_VIP_IP:-}" ]]; then
+    source "$repo_dir/scripts/lib/vip.sh"
+    vip_patch="$(talos_lab_vip_patch "$node_id")"
+    patch_args+=(--config-patch-control-plane "$vip_patch")
+  fi
   if [[ "$CP_WORKLOADS" == "true" ]]; then
     patch_args+=(--config-patch-control-plane "@$repo_dir/patches/allow-scheduling.yaml")
   elif [[ "$CP_WORKLOADS" == "false" ]]; then

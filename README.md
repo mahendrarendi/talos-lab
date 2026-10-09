@@ -111,6 +111,35 @@ Worker registration may take a few minutes after `apply-config` reports success.
 
 For worker 03 and later, use `bash scripts/render.sh worker <node-id> <unique-hostname>`, then apply the generated `_out/worker-<node-id>.yaml` to that node's IP. If its disk or network needs different settings, adjust the generation inputs or patch before applying.
 
+## Optional: API VIP for the existing cluster
+
+The current Kubernetes API name still points to CP1. Talos v1.14 supports a shared layer-2 API VIP with a `Layer2VIPConfig` document on **control-plane nodes only** ([Talos reference](https://docs.siderolabs.com/talos/v1.14/reference/configuration/network/layer2vipconfig)). A VIP is an unused address on the CPs' common layer-2 network; one CP advertises it at a time. This is API failover, not an application load balancer. Confirm that the VM switch/network permits gratuitous ARP before using this pattern.
+
+This repository has VIP support **disabled by default**. When the network team or hypervisor owner has reserved an unused IPv4 address, put it in `API_VIP_IP` in ignored `.env`. Read the actual Talos link name on **each** CP and set `CP1_VIP_LINK`, `CP2_VIP_LINK`, and `CP3_VIP_LINK` there. Do not put the real VIP in tracked files. To inspect a CP link, for example:
+
+```bash
+source .env
+talosctl get links --talosconfig _out/talosconfig --endpoints "$CP1_IP" --nodes "$CP1_IP"
+```
+
+With those values confirmed, generate a minimal, node-specific VIP patch for each CP:
+
+```bash
+bash scripts/render-vip.sh cp1
+bash scripts/render-vip.sh cp2
+bash scripts/render-vip.sh cp3
+```
+
+The outputs are ignored `_out/api-vip-cp1.yaml`, `_out/api-vip-cp2.yaml`, and `_out/api-vip-cp3.yaml`. Inspect each `name` (VIP) and `link` before use. The same values are included in **future** CP full-config renders; worker renders never receive the VIP. Existing `_out/controlplane*.yaml` files do not change automatically, and these full install configs must not be reapplied to live CPs.
+
+Before any live change, take an off-cluster etcd snapshot, confirm all three CPs and etcd members are healthy, then review each authenticated patch with `--dry-run`, one CP at a time:
+
+```bash
+talosctl patch mc --talosconfig _out/talosconfig --endpoints "$CP1_IP" --nodes "$CP1_IP" --patch @_out/api-vip-cp1.yaml --dry-run
+```
+
+Do not patch live nodes until the VIP, three links, and network behavior are verified. After a controlled one-at-a-time rollout and VIP failover test, change the API name's DNS record and the controller's `/etc/hosts` override to the VIP. Keep the API **hostname** unchanged so the configured endpoint and kubeconfig still use the same name. Do not bootstrap again.
+
 ## After the cluster is up
 
 - Use `kubectl get nodes -o wide`, `kubectl get pods -A -o wide`, and `talosctl etcd members --nodes "$CP1_IP"` to check node, system-pod, and etcd health.
