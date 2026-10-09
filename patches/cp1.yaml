@@ -2,4 +2,4 @@ apiVersion: v1alpha1
 kind: HostnameConfig
 auto:
   $patch: delete
-hostname: devtalos1ab01
+hostname: srvcp1ab01
