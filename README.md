@@ -25,9 +25,19 @@ Replace the placeholder with the real DNS server address. This server must answe
 
 Machine configurations, `talosconfig`, and the secrets bundle contain credentials. `_out/`, `.env`, and `secrets-*.yaml` are ignored by Git. Keep backups of the secrets bundle and generated client config outside the cluster.
 
+The fixed render targets map to these hostname patches and outputs:
+
+| Target | Hostname patch | Generated file |
+| --- | --- | --- |
+| `cp1` | `patches/srvcp1ab01.yaml` | `_out/controlplane.yaml` |
+| `cp2` | `patches/srvcp1ab02.yaml` | `_out/controlplane-cp2.yaml` |
+| `cp3` | `patches/srvcp1ab03.yaml` | `_out/controlplane-cp3.yaml` |
+| `w1` | `patches/srvwrk1ab01.yaml` | `_out/worker.yaml` |
+| `w2` | `patches/srvwrk1ab02.yaml` | `_out/worker-w2.yaml` |
+
 ## Stage 1: CP1
 
-Run `bash scripts/render.sh cp1`. Inspect `_out/controlplane.yaml`, especially the endpoint, `UnattendedInstallConfig` disk selector and installer image, and Kubernetes component versions. The CP1 hostname comes from `patches/cp1.yaml`. To regenerate an existing output after changing `.env` or a patch, run `TALOS_LAB_OVERWRITE=1 bash scripts/render.sh cp1`. The script preserves `_out/talosconfig` when rerendering; set `TALOS_LAB_REGENERATE_CLIENT=1` only when you intentionally need a new client config.
+Run `bash scripts/render.sh cp1`. Inspect `_out/controlplane.yaml`, especially the endpoint, `UnattendedInstallConfig` disk selector and installer image, and Kubernetes component versions. The CP1 hostname comes from `patches/srvcp1ab01.yaml`. To regenerate an existing output after changing `.env` or a patch, run `TALOS_LAB_OVERWRITE=1 bash scripts/render.sh cp1`. The script preserves `_out/talosconfig` when rerendering; set `TALOS_LAB_REGENERATE_CLIENT=1` only when you intentionally need a new client config. **Always inspect the generated hostname before applying the file**; changing a patch does not automatically update an existing `_out/` file.
 
 If CP1 is only in Talos maintenance mode and belongs to this new cluster:
 
@@ -49,7 +59,7 @@ Wait for CP1 to reboot and for authenticated `talosctl version` to work before b
 
 ## Stage 2: CP2 and CP3
 
-Fill `CP2_IP` and `CP3_IP` in `.env` when the VMs exist. Give each VM the same Talos minor version and a unique stable IP/hostname. Generate one config at a time:
+Fill `CP2_IP` and `CP3_IP` in `.env` when the VMs exist. Give each VM the same Talos minor version and a unique stable IP/hostname. The hostname patches are `patches/srvcp1ab02.yaml` and `patches/srvcp1ab03.yaml`. Generate one config at a time:
 
 ```sh
 bash scripts/render.sh cp2
@@ -69,12 +79,14 @@ To study resource scaling, record each VM's vCPU, RAM, and system disk size befo
 
 ## Stage 3: workers
 
-For the first worker, `bash scripts/render.sh w1` produces `_out/worker.yaml` using `patches/w1.yaml`. For later workers, run `bash scripts/render.sh worker w2 devtalos1ab05` to produce `_out/worker-w2.yaml` (choose a unique ID and hostname). Apply each resulting file to its fresh maintenance-mode worker:
+For worker 01, `bash scripts/render.sh w1` produces `_out/worker.yaml` using `patches/srvwrk1ab01.yaml`. For worker 02, `bash scripts/render.sh w2` produces `_out/worker-w2.yaml` using `patches/srvwrk1ab02.yaml`. For later workers, run `bash scripts/render.sh worker w3 srvwrk1ab03` to produce `_out/worker-w3.yaml` (choose a unique ID and hostname). If a generated file already exists, set `TALOS_LAB_OVERWRITE=1` to regenerate it after changing a patch. Inspect its hostname and install disk before applying it to a fresh maintenance-mode worker:
 
 ```sh
 talosctl apply-config --insecure --nodes <WORKER_IP> --file _out/worker.yaml
 kubectl --kubeconfig _out/kubeconfig get nodes -o wide
 ```
+
+For worker 02, use `_out/worker-w2.yaml` and its own IP instead. Never apply the same hostname config to two live nodes.
 
 Once workers can host your applications, set `CP_WORKLOADS=false` for future configs and patch **each live CP** with `cluster.yaml` using authenticated `talosctl patch mc --patch @cluster.yaml --nodes <CP_IP>`. First inspect the proposed change with `--dry-run`. Move or drain any application pods already running on CPs; changing the scheduling setting does not by itself migrate existing pods.
 

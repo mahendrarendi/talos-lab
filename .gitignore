@@ -5,3 +5,4 @@ kubeconfig
 talosconfig
 secrets-*.yaml
 /.git-local/
+/docs/

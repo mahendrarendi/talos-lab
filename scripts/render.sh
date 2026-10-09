@@ -32,7 +32,7 @@ if [[ ! -f "$secrets_path" ]]; then
 fi
 
 usage() {
-  echo "Usage: scripts/render.sh cp1|cp2|cp3|w1" >&2
+  echo "Usage: scripts/render.sh cp1|cp2|cp3|w1|w2" >&2
   echo "       scripts/render.sh worker <node-id> <hostname>" >&2
   exit 2
 }
@@ -43,21 +43,35 @@ role=""
 hostname_patch=""
 
 case "$node_id" in
-  cp1|cp2|cp3)
+  cp1)
     [[ $# -eq 1 ]] || usage
     role="controlplane"
-    hostname_patch="@$repo_dir/patches/$node_id.yaml"
-    if [[ "$node_id" == cp1 ]]; then
-      output_name="controlplane.yaml"
-    else
-      output_name="controlplane-$node_id.yaml"
-    fi
+    hostname_patch="@$repo_dir/patches/srvcp1ab01.yaml"
+    output_name="controlplane.yaml"
+    ;;
+  cp2)
+    [[ $# -eq 1 ]] || usage
+    role="controlplane"
+    hostname_patch="@$repo_dir/patches/srvcp1ab02.yaml"
+    output_name="controlplane-cp2.yaml"
+    ;;
+  cp3)
+    [[ $# -eq 1 ]] || usage
+    role="controlplane"
+    hostname_patch="@$repo_dir/patches/srvcp1ab03.yaml"
+    output_name="controlplane-cp3.yaml"
     ;;
   w1)
     [[ $# -eq 1 ]] || usage
     role="worker"
-    hostname_patch="@$repo_dir/patches/w1.yaml"
+    hostname_patch="@$repo_dir/patches/srvwrk1ab01.yaml"
     output_name="worker.yaml"
+    ;;
+  w2)
+    [[ $# -eq 1 ]] || usage
+    role="worker"
+    hostname_patch="@$repo_dir/patches/srvwrk1ab02.yaml"
+    output_name="worker-w2.yaml"
     ;;
   worker)
     [[ $# -eq 3 ]] || usage
@@ -73,6 +87,11 @@ case "$node_id" in
     ;;
   *) usage ;;
 esac
+
+if [[ "$hostname_patch" == @* && ! -f "${hostname_patch#@}" ]]; then
+  echo "Hostname patch not found: ${hostname_patch#@}" >&2
+  exit 1
+fi
 
 output_dir="${TALOS_LAB_OUTPUT_DIR:-$repo_dir/_out}"
 mkdir -p "$output_dir"
