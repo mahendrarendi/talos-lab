@@ -1,0 +1,7 @@
+.env
+secrets.yaml
+_out/
+kubeconfig
+talosconfig
+secrets-*.yaml
+/.git-local/
