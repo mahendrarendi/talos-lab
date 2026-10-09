@@ -1,97 +1,119 @@
-# Talos lab: one control plane to three, then workers
+# Talos Kubernetes lab
 
-This repository prepares machine configurations for a staged Talos cluster. Rendering a file does not apply it to a node. The current lab plan uses CP1 at `10.87.44.20`, Kubernetes 1.36, and the stable Kubernetes API name `k8s-lab.internal`.
+This lab grows one Kubernetes cluster in three stages: bootstrap CP1 once, join CP2 and CP3, then add workers. The lab's Talos version target is **v1.14.1**, and all five nodes were reported `Ready` on Kubernetes **v1.36.0** after worker 02 joined.
 
-Talos 1.14 supports Kubernetes 1.36 ([support matrix](https://docs.siderolabs.com/talos/v1.14/getting-started/support-matrix)). Confirm the exact version booted on CP1 and use its matching installer image. The example image in `.env.example` is for the locally installed `talosctl` v1.14.1; a custom Image Factory build needs its own installer image. Confirm the target Kubernetes patch version too.
+| Node | Role | IP | Render target | Generated config |
+| --- | --- | --- | --- | --- |
+| `srvcp1ab01` | Control plane | `10.87.44.20` | `cp1` | `_out/controlplane.yaml` |
+| `srvcp1ab02` | Control plane | `10.87.44.221` | `cp2` | `_out/controlplane-cp2.yaml` |
+| `srvcp1ab03` | Control plane | `10.87.44.34` | `cp3` | `_out/controlplane-cp3.yaml` |
+| `srvwrk1ab01` | Worker | `10.87.44.248` | `w1` | `_out/worker.yaml` |
+| `srvwrk1ab02` | Worker | `10.87.44.60` | `w2` | `_out/worker-w2.yaml` |
 
-## Prepare once
+**If you are using this existing cluster, do not run bootstrap or reapply the installation configs in this guide.** The commands below document the build sequence and are for fresh, unconfigured nodes. Check live state before changing anything.
 
-1. Review `.env` (or copy `.env.example` to `.env` on a fresh checkout) and confirm the API endpoint, Talos version contract, installer image, Kubernetes version, disk, and DNS. Check the booted version with `talosctl version --insecure --nodes 10.87.44.20`. Keep `TALOS_VERSION_CONTRACT` fixed for repeatable generation until you intentionally upgrade Talos. `_out/` is the only generated-output directory used by this workflow; the root `talosconfig` is from the previous attempt.
-2. Make `k8s-lab.internal` resolve to CP1's IP for stage 1 **from every Talos node and your workstation**. This requires an internal DNS record and DNS service reachable by the VMs. The previous public DNS addresses may not resolve `.internal`. If DHCP does not supply suitable DNS, create `patches/resolver.yaml` with a `ResolverConfig` document, set `COMMON_PATCH=patches/resolver.yaml` in `.env`, then render. Before calling the cluster highly available, move that name to a TCP load balancer or a Talos VIP backed by all three CPs. Keep the endpoint name unchanged in machine configurations.
-3. Decide whether this is the old cluster identity. If it is, retain `secrets.yaml`. If this is a fresh cluster, generate a new bundle with `talosctl gen secrets -o secrets-new.yaml` and set `SECRETS_FILE=secrets-new.yaml` in `.env`. Never overwrite the old bundle. If CP1 was already configured, use the exact secrets from that running cluster; creating new secrets will produce a different cluster.
-4. Check the actual install disk on each node in maintenance mode: `talosctl get disks --insecure --nodes <IP>`. `INSTALL_DISK=/dev/vda` is only the previous lab assumption. Set VM CPU, RAM, and disk **size** in the hypervisor; these YAML files set the install disk **device**.
-5. The render script uses current Talos defaults for DNS; add a current `ResolverConfig` document before rendering if these VMs need specific DNS servers.
+## The configuration pattern
 
-If internal DNS is needed, the contents of `patches/resolver.yaml` should be:
+`scripts/render.sh` generates a Talos machine config; it does **not** install or change a node. The script reuses the cluster settings and `secrets.yaml`, then applies a hostname patch for the selected node. The IP is passed through a command's `--nodes` flag when applying or checking that config; it is not a substitute for the hostname.
 
-```yaml
-apiVersion: v1alpha1
-kind: ResolverConfig
-nameservers:
-  - address: <INTERNAL_DNS_SERVER_IP>
+Use one generated file per node. In particular, `_out/worker.yaml` is **worker 01's finished config**, with hostname `srvwrk1ab01`; do not apply that exact file to worker 02. For a later worker, the generic target accepts a node ID and unique hostname:
+
+```bash
+bash scripts/render.sh worker w3 srvwrk1ab03
+# Creates _out/worker-w3.yaml
 ```
 
-Replace the placeholder with the real DNS server address. This server must answer `k8s-lab.internal` and resolve image registry names needed during installation.
+The script currently has fixed targets for CP1–CP3 and workers 01–02. Adding CP4 requires a new control-plane target and hostname patch. Use the [Talos scale-up guide](https://docs.siderolabs.com/talos/v1.14/deploy-and-manage-workloads/scaling-up) for the underlying join behavior: a new node joins after its role-appropriate config is applied; it does not get another etcd bootstrap.
 
-Machine configurations, `talosconfig`, and the secrets bundle contain credentials. `_out/`, `.env`, and `secrets-*.yaml` are ignored by Git. Keep backups of the secrets bundle and generated client config outside the cluster.
+## Prepare a fresh lab
 
-The fixed render targets map to these hostname patches and outputs:
+1. Copy `.env.example` to `.env` and review the cluster name, API endpoint, Talos installer image/version, Kubernetes version, and `INSTALL_DISK`. VM CPU, RAM, and disk **size** are configured in the hypervisor; `INSTALL_DISK` selects the device Talos will install onto.
+2. Ensure `k8s-lab.internal` resolves from the controller **and every Talos node**. In this lab it currently resolves to CP1 (`10.87.44.20`); the DNS name alone does not make the Kubernetes API highly available. For production-like API failover, place a suitable load balancer or VIP behind that name.
+3. Choose the cluster secrets deliberately. For a brand-new cluster, generate a new bundle with `talosctl gen secrets -o secrets-new.yaml` and set `SECRETS_FILE=secrets-new.yaml`. For an existing cluster, keep using its original `secrets.yaml`; changing secrets creates a different cluster identity. Never commit these files.
+4. If the nodes need a particular DNS resolver, create `patches/resolver.yaml` with a Talos `ResolverConfig`, set `COMMON_PATCH=patches/resolver.yaml` in `.env`, then render. The resolver must answer `k8s-lab.internal` and public registry names.
 
-| Target | Hostname patch | Generated file |
-| --- | --- | --- |
-| `cp1` | `patches/srvcp1ab01.yaml` | `_out/controlplane.yaml` |
-| `cp2` | `patches/srvcp1ab02.yaml` | `_out/controlplane-cp2.yaml` |
-| `cp3` | `patches/srvcp1ab03.yaml` | `_out/controlplane-cp3.yaml` |
-| `w1` | `patches/srvwrk1ab01.yaml` | `_out/worker.yaml` |
-| `w2` | `patches/srvwrk1ab02.yaml` | `_out/worker-w2.yaml` |
+Before **each** new node is configured, check its maintenance-mode version and actual writable disk:
 
-## Stage 1: CP1
+```bash
+talosctl version --insecure --nodes <NEW_NODE_IP>
+talosctl get disks --insecure --nodes <NEW_NODE_IP>
+```
 
-Run `bash scripts/render.sh cp1`. Inspect `_out/controlplane.yaml`, especially the endpoint, `UnattendedInstallConfig` disk selector and installer image, and Kubernetes component versions. The CP1 hostname comes from `patches/srvcp1ab01.yaml`. To regenerate an existing output after changing `.env` or a patch, run `TALOS_LAB_OVERWRITE=1 bash scripts/render.sh cp1`. The script preserves `_out/talosconfig` when rerendering; set `TALOS_LAB_REGENERATE_CLIENT=1` only when you intentionally need a new client config. **Always inspect the generated hostname before applying the file**; changing a patch does not automatically update an existing `_out/` file.
+Confirm the Talos version matches the intended installer image and that `INSTALL_DISK` selects the correct disk. Applying a config can install to that disk. Do not apply a file if its hostname, disk, cluster endpoint, or version is wrong.
 
-If CP1 is only in Talos maintenance mode and belongs to this new cluster:
+`_out/`, `.env`, and secrets files are ignored by Git. Generated machine configs and `talosconfig` contain credentials; store backups securely off-cluster. `/docs/` is also intentionally local and ignored.
 
-```sh
+## Stage 1: bootstrap CP1 once
+
+For a **new CP1 in maintenance mode**, render, inspect, and apply its config:
+
+```bash
+bash scripts/render.sh cp1
 talosctl apply-config --insecure --nodes 10.87.44.20 --file _out/controlplane.yaml
+```
+
+Wait until the authenticated Talos API responds. Then bootstrap etcd **one time for the entire cluster** and obtain a separate Kubernetes client config:
+
+```bash
 export TALOSCONFIG="$PWD/_out/talosconfig"
 talosctl config endpoint 10.87.44.20
 talosctl config node 10.87.44.20
-talosctl --nodes 10.87.44.20 version
-talosctl --nodes 10.87.44.20 bootstrap
-talosctl --nodes 10.87.44.20 health
-talosctl --nodes 10.87.44.20 kubeconfig _out/kubeconfig
-kubectl --kubeconfig _out/kubeconfig get nodes -o wide
+talosctl version --nodes 10.87.44.20
+talosctl bootstrap --nodes 10.87.44.20
+talosctl etcd members --nodes 10.87.44.20
+talosctl kubeconfig _out/kubeconfig --merge=false --nodes 10.87.44.20
+export KUBECONFIG="$PWD/_out/kubeconfig"
+kubectl get nodes -o wide
 ```
 
-Wait for CP1 to reboot and for authenticated `talosctl version` to work before bootstrapping. Run `bootstrap` **once per cluster**, only after applying CP1's config. If CP1 already has a machine config or Kubernetes is already running, do not apply this newly rendered file and do not bootstrap again until you compare its live cluster identity and configuration. The sequence above is for a fresh maintenance-mode node.
+Do not run `bootstrap` again when adding any other node. If CP1 already has a machine config or Kubernetes is running, these installation commands are **not** a repair procedure.
 
-`CP_WORKLOADS=true` removes the default control-plane taint so application pods can run in the CP-only lab. It is optional if you only want to bring up Kubernetes system components. `patches/allow-scheduling.yaml` records that stage-1 choice. Talos 1.14 expresses this with `KubeNodeConfig`, rather than the old `cluster.allowSchedulingOnControlPlanes` field.
+## Stage 2: join CP2, then CP3
 
-## Stage 2: CP2 and CP3
+For each new CP, perform the version/disk preflight above, render its own config, inspect the hostname and disk, and apply it. Complete CP2's checks before starting CP3:
 
-Fill `CP2_IP` and `CP3_IP` in `.env` when the VMs exist. Give each VM the same Talos minor version and a unique stable IP/hostname. The hostname patches are `patches/srvcp1ab02.yaml` and `patches/srvcp1ab03.yaml`. Generate one config at a time:
-
-```sh
+```bash
 bash scripts/render.sh cp2
-talosctl apply-config --insecure --nodes <CP2_IP> --file _out/controlplane-cp2.yaml
-talosctl --nodes 10.87.44.20 etcd members
-kubectl --kubeconfig _out/kubeconfig get nodes -o wide
+talosctl apply-config --insecure --nodes 10.87.44.221 --file _out/controlplane-cp2.yaml
+kubectl get nodes -o wide
+talosctl etcd members --nodes 10.87.44.20
+```
 
+Confirm CP2 is `Ready` **and** appears as a non-learner etcd member. Then repeat for CP3:
+
+```bash
 bash scripts/render.sh cp3
-talosctl apply-config --insecure --nodes <CP3_IP> --file _out/controlplane-cp3.yaml
-talosctl --nodes 10.87.44.20 etcd members
-kubectl --kubeconfig _out/kubeconfig get nodes -o wide
+talosctl apply-config --insecure --nodes 10.87.44.34 --file _out/controlplane-cp3.yaml
+kubectl get nodes -o wide
+talosctl etcd members --nodes 10.87.44.20
 ```
 
-There is no second bootstrap. Wait for CP2 to join before applying CP3. Two CPs are only a transition: both are needed for etcd quorum. After three CPs are healthy, configure the API endpoint across all three and set `talosctl config endpoint <CP1_IP> <CP2_IP> <CP3_IP>` so Talos API access can fail over. The Talos API uses CP addresses, not the Kubernetes VIP.
+Two etcd members are only an intermediate stage: both are required for quorum. With three healthy CPs, Talos API access can use all three endpoints:
 
-To study resource scaling, record each VM's vCPU, RAM, and system disk size before and after a resize. With one CP, a resize requiring reboot interrupts the API. With three healthy CPs, resize or replace only one CP at a time, and verify etcd membership and Kubernetes readiness before touching the next. Workload capacity grows by adding workers; schedule replicas across separate workers to test application availability.
-
-## Stage 3: workers
-
-For worker 01, `bash scripts/render.sh w1` produces `_out/worker.yaml` using `patches/srvwrk1ab01.yaml`. For worker 02, `bash scripts/render.sh w2` produces `_out/worker-w2.yaml` using `patches/srvwrk1ab02.yaml`. For later workers, run `bash scripts/render.sh worker w3 srvwrk1ab03` to produce `_out/worker-w3.yaml` (choose a unique ID and hostname). If a generated file already exists, set `TALOS_LAB_OVERWRITE=1` to regenerate it after changing a patch. Inspect its hostname and install disk before applying it to a fresh maintenance-mode worker:
-
-```sh
-talosctl apply-config --insecure --nodes <WORKER_IP> --file _out/worker.yaml
-kubectl --kubeconfig _out/kubeconfig get nodes -o wide
+```bash
+talosctl config endpoint 10.87.44.20 10.87.44.221 10.87.44.34
 ```
 
-For worker 02, use `_out/worker-w2.yaml` and its own IP instead. Never apply the same hostname config to two live nodes.
+This improves **Talos API** access. Separately, `k8s-lab.internal:6443` still needs a load balancer or VIP for **Kubernetes API** failover.
 
-Once workers can host your applications, set `CP_WORKLOADS=false` for future configs and patch **each live CP** with `cluster.yaml` using authenticated `talosctl patch mc --patch @cluster.yaml --nodes <CP_IP>`. First inspect the proposed change with `--dry-run`. Move or drain any application pods already running on CPs; changing the scheduling setting does not by itself migrate existing pods.
+## Stage 3: join workers
 
-## Repeatable checks and article notes
+The same preflight/render/inspect/apply/check loop applies to workers. Worker 01 used `w1` and `_out/worker.yaml`; worker 02 used `w2` and `_out/worker-w2.yaml`. For a **new worker 02 in maintenance mode**, the commands are:
 
-At each stage, record the Talos version (`talosctl --nodes <IP> version`), Kubernetes nodes (`kubectl get nodes -o wide`), etcd members (`talosctl --nodes <CP_IP> etcd members`), endpoint target, VM CPU/RAM/disk, and what happened during a controlled node shutdown. Capture an etcd snapshot and keep it off-cluster before maintenance: `talosctl --nodes <CP_IP> etcd snapshot <backup-path>`.
+```bash
+bash scripts/render.sh w2
+talosctl apply-config --insecure --nodes 10.87.44.60 --file _out/worker-w2.yaml
+kubectl get nodes -o wide
+```
 
-After upgrading Kubernetes, old generated machine configs may contain stale component versions. Regenerate from the same secrets with the new version values before adding more nodes; do not reapply old full configs to live nodes. Talos documents this in its [scale-up](https://docs.siderolabs.com/talos/v1.14/deploy-and-manage-workloads/scaling-up) and [reproducible configuration](https://docs.siderolabs.com/talos/v1.14/configure-your-talos-cluster/system-configuration/reproducible-machine-configuration) guides.
+Worker registration may take a few minutes after `apply-config` reports success. Do not reapply or bootstrap just because an immediate `kubectl get nodes` does not yet list it. Confirm the expected unique hostname is `Ready` and inspect `kubectl get pods -A -o wide` for system pods.
+
+For worker 03 and later, use `bash scripts/render.sh worker <node-id> <unique-hostname>`, then apply the generated `_out/worker-<node-id>.yaml` to that node's IP. If its disk or network needs different settings, adjust the generation inputs or patch before applying.
+
+## After the cluster is up
+
+- Use `kubectl get nodes -o wide`, `kubectl get pods -A -o wide`, and `talosctl etcd members --nodes 10.87.44.20` to check node, system-pod, and etcd health.
+- `CP_WORKLOADS=true` in `.env` generated configs that permit workloads on CPs for the early CP-only lab. Now that workers exist, decide whether to keep that behavior. Changing `.env` affects **future renders only**; it does not change live CPs. To restore control-plane `NoSchedule`, plan pod migration/draining, review `talosctl patch mc --patch @cluster.yaml --nodes <CP_IP> --dry-run`, and patch live CPs one at a time.
+- If a generated output already exists, `render.sh` refuses to replace it. After deliberately changing `.env` or a patch, use `TALOS_LAB_OVERWRITE=1 bash scripts/render.sh <target>`, inspect the new file, and do **not** automatically reapply it to a running node. The script preserves `_out/talosconfig` unless `TALOS_LAB_REGENERATE_CLIENT=1` is explicitly set.
+- Keep Talos and Kubernetes versions aligned with the running cluster. After an upgrade, old generated configs may be stale; regenerate from the **same cluster secrets** before adding nodes. See the [Talos reproducible configuration guide](https://docs.siderolabs.com/talos/v1.14/configure-your-talos-cluster/system-configuration/reproducible-machine-configuration).
+- Record VM vCPU/RAM/disk capacity and test changes one node at a time. Three healthy CPs protect etcd quorum; workload resilience also needs replicas spread across workers, reliable API access, and backups. Take an etcd snapshot to off-cluster storage before disruptive maintenance.
